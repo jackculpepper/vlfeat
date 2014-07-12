@@ -266,3 +266,184 @@ def vl_rgb2gray(data):
 	"""
 	return numpy.round(0.2989 * data[:,:,0] + 0.5870 * data[:,:,1] + 0.1140 * data[:,:,2])
 
+
+
+def vl_phow(im, norm=True, fast=True, step=3, sizes=[4, 6, 8, 10],
+            window_size=1.5, magnif=6.0, verbose=True,
+            contrast_threshold=0.005):
+    import numpy as np
+
+    descrs = np.zeros((128,0), dtype=np.single)
+    frames = np.zeros((4,0), dtype=np.double)
+
+    for si in range(len(sizes)):
+
+        # Recall from VL_DSIFT() that the first descriptor for scale SIZE has
+        # center located at XC = XMIN + 3/2 SIZE (the Y coordinate is
+        # similar). It is convenient to align the descriptors at different
+        # scales so that they have the same geometric centers. For the
+        # maximum size we pick XMIN = 1 and we get centers starting from
+        # XC = 1 + 3/2 MAX(OPTS.SIZES). For any other scale we pick XMIN so
+        # that XMIN + 3/2 SIZE = 1 + 3/2 MAX(OPTS.SIZES).
+        #
+        # In practice, the offset must be integer ('bounds'), so the
+        # alignment works properly only if all OPTS.SZES are even or odd.
+
+        off = np.floor(3.0/2.0 * (max(sizes) - sizes[si]))
+        bounds = np.array([off, off, np.infty, np.infty], dtype=np.double)
+
+        # scale space
+        sigma = sizes[si] / magnif
+        ims = vl_imsmooth(im, sigma)
+
+        ## setting norm=True means f will have 3 dims
+        f, d = vl_dsift(ims, norm=True, fast=True, step=step, bounds=bounds,
+                        size=sizes[si], window_size=window_size,
+                        verbose=verbose)
+
+        # zero out low contrast descriptors
+        idx = f[2,:] < contrast_threshold
+        d[:,idx] = 0
+
+        # append the scale so we have x,y,norm,scale
+        scale = np.ones((1,f.shape[1]), dtype=np.double) * sizes[si]
+        f = np.vstack([f, scale])
+
+
+        descrs = np.hstack([descrs, d])
+        frames = np.hstack([frames, f])
+
+    ## use 1-based pixel numbering, as the matlab impl does
+    frames[:2,:] += 1
+
+    return frames, descrs
+
+
+def vl_phow_color(im, norm=True, fast=True, step=3, sizes=[4, 6, 8, 10],
+                  window_size=1.5, magnif=6.0, verbose=True,
+                  contrast_threshold=0.005, color='rgb', debug=False):
+    import numpy as np
+
+    if debug:
+        import scipy.io
+
+    descrs = np.zeros((384,0), dtype=np.single)
+    frames = np.zeros((4,0), dtype=np.double)
+
+    # make sure we get an image with 3 color channels to start with
+    assert len(im.shape) == 3
+
+    channels = im.shape[2]
+
+    # standardize the image
+    if color == 'rgb':
+        pass
+    elif color == 'opponent':
+        mu = 0.3*im[:,:,0] + 0.59*im[:,:,1] + 0.11*im[:,:,2]
+        alpha = 0.01
+
+        im_opponent = im.copy()
+        im_opponent[:,:,0] = mu
+        im_opponent[:,:,1] = (im[:,:,0] - im[:,:,1])/np.sqrt(2) + alpha*mu
+        im_opponent[:,:,2] = \
+            (im[:,:,0] + im[:,:,1] - 2*im[:,:,2])/np.sqrt(6) + alpha*mu
+
+        im = im_opponent
+
+    for si in range(len(sizes)):
+
+        # Recall from VL_DSIFT() that the first descriptor for scale SIZE has
+        # center located at XC = XMIN + 3/2 SIZE (the Y coordinate is
+        # similar). It is convenient to align the descriptors at different
+        # scales so that they have the same geometric centers. For the
+        # maximum size we pick XMIN = 1 and we get centers starting from
+        # XC = 1 + 3/2 MAX(OPTS.SIZES). For any other scale we pick XMIN so
+        # that XMIN + 3/2 SIZE = 1 + 3/2 MAX(OPTS.SIZES).
+        #
+        # In practice, the offset must be integer ('bounds'), so the
+        # alignment works properly only if all OPTS.SZES are even or odd.
+
+        off = np.floor(3.0/2.0 * (max(sizes) - sizes[si]))
+        bounds = np.array([off, off, np.infty, np.infty], dtype=np.double)
+
+        # scale space
+        sigma = sizes[si] / magnif
+        ims = vl_imsmooth(im, sigma)
+
+        d_color = []
+        f_color = []
+        for ch in range(channels):
+            ## setting norm=True means f will have 3 dims
+            f, d = vl_dsift(ims[:,:,ch], norm=True, fast=True,
+                            step=step, bounds=bounds,
+                            size=sizes[si], window_size=window_size,
+                            verbose=verbose)
+
+            #print f[:,:10].T
+
+            ## use 1-based pixel numbering, as the matlab impl does
+            f[:2,:] += 1
+
+
+            if debug:
+                matfile = scipy.io.loadmat('testfiles/000001_jpg_phow_float_color=rgb_si=%d_ch=%d.mat' % (si+1, ch+1))
+
+                dmat = matfile['dk']
+                fmat = matfile['fk']
+
+                print "d:"
+                print d
+                print "dmat:"
+                print dmat
+
+                diff = dmat - d
+                print "avg desc error:", (diff**2).sum(0).mean()
+
+                diff = fmat - f
+                print "avg frame error:", (diff**2).sum(0).mean()
+
+
+            d_color.append(d)
+            f_color.append(f)
+
+
+        # concat descriptors from color channels together to get 384xN
+        d = d_color[0]
+        for ch in range(channels-1):
+            d = np.vstack([d, d_color[ch+1]])
+
+        # compute contrast
+        if color == 'rgb':
+            contrast = np.mean([ f_color[0][2,:],
+                                 f_color[1][2,:],
+                                 f_color[2][2,:] ], axis=0)
+            #contrast = f_color[0][2,:]
+        elif color == 'opponent':
+            contrast = f_color[0][2,:]
+
+
+        if debug:
+            matfile = scipy.io.loadmat('testfiles/000001_jpg_phow_float_color=rgb_si=%d_contrast.mat' % (si+1))
+            contrastmat = matfile['contrast']
+            diff = contrastmat - contrast
+            print "avg contrast error:", (diff**2).sum(0).mean()
+
+        # zero out low contrast descriptors
+        idx = contrast < contrast_threshold
+        d[:,idx] = 0
+
+        # use the frame from the first color channel, to match matlab code
+        f = f_color[0]
+
+        # append the scale so we have x,y,norm,scale
+        scale = np.ones((1,f.shape[1]), dtype=np.double) * sizes[si]
+        f = np.vstack([f, scale])
+
+
+        descrs = np.hstack([descrs, d])
+        frames = np.hstack([frames, f])
+
+    return frames, descrs
+
+
+
