@@ -3,8 +3,11 @@
 from distutils.core import setup, Extension
 
 _vlfeat = Extension('_vlfeat',
-                    include_dirs = ['/usr/include/python2.7', './vl', '.'],
-                    libraries = ['boost_python-mt-py26'],
+                    include_dirs = ['/usr/local/include/python2.7',
+                                    '/usr/local/lib/python2.7/site-packages/numpy/core/include',
+                                    './vl',
+                                    '.'],
+                    libraries = ['boost_python'],
                     extra_compile_args = ['-fopenmp'],
                     extra_link_args = ['-fopenmp'],
                     sources = ['vl/aib.c',
